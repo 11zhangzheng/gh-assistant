@@ -78,6 +78,13 @@ class GitHubClient:
         return self._get(f"/repos/{repo}/labels")
 
     # ── issue writes ───────────────────────────────────────
+    def create_issue(self, repo: str, title: str, body: str = "",
+                     labels: list[str] | None = None) -> dict:
+        payload = {"title": title, "body": body}
+        if labels:
+            payload["labels"] = labels
+        return self._post(f"/repos/{repo}/issues", payload)
+
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> list[dict]:
         return self._post(f"/repos/{repo}/issues/{issue_number}/labels",
                           {"labels": labels})
