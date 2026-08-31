@@ -1,0 +1,16 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# gh-assistant runtime state
+.memory/
+.tasks/
+.mailboxes/
+.worktrees/
+.transcripts/
+.task_outputs/
