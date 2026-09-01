@@ -1,0 +1,168 @@
+version: 1
+description: Eight deterministic Python bug-fix tasks with hidden verification.
+cases:
+  - id: normalize-username
+    issue:
+      title: Normalize usernames consistently
+      body: normalize_username should trim surrounding whitespace and lowercase the value. The current implementation only lowercases it.
+    files:
+      usernames.py: |
+        def normalize_username(value: str) -> str:
+            return value.lower()
+      tests/test_usernames.py: |
+        from usernames import normalize_username
+
+        def test_lowercases_username():
+            assert normalize_username("Alice") == "alice"
+      pyproject.toml: |
+        [tool.pytest.ini_options]
+        testpaths = ["tests"]
+    verify: [["python", "-m", "pytest", "-q"]]
+    hidden:
+      argv: ["python", "-c", "from usernames import normalize_username; assert normalize_username('  ALIce \\t') == 'alice'"]
+
+  - id: inclusive-range
+    issue:
+      title: Include the upper bound in integer ranges
+      body: integers_between(start, end) is documented as inclusive at both ends, but the end value is missing.
+    files:
+      ranges.py: |
+        def integers_between(start: int, end: int) -> list[int]:
+            return list(range(start, end))
+      tests/test_ranges.py: |
+        from ranges import integers_between
+
+        def test_basic_range():
+            assert integers_between(1, 3) == [1, 2, 3]
+      pyproject.toml: |
+        [tool.pytest.ini_options]
+        testpaths = ["tests"]
+    verify: [["python", "-m", "pytest", "-q"]]
+    hidden:
+      argv: ["python", "-c", "from ranges import integers_between; assert integers_between(0, 0) == [0]; assert integers_between(-2, -1) == [-2, -1]"]
+
+  - id: empty-csv
+    issue:
+      title: Empty CSV input should produce no fields
+      body: split_fields currently returns one empty field for blank input. Blank or whitespace-only input should return an empty list and nonblank fields should be stripped.
+    files:
+      csv_utils.py: |
+        def split_fields(value: str) -> list[str]:
+            return value.split(",")
+      tests/test_csv_utils.py: |
+        from csv_utils import split_fields
+
+        def test_blank_input():
+            assert split_fields("") == []
+      pyproject.toml: |
+        [tool.pytest.ini_options]
+        testpaths = ["tests"]
+    verify: [["python", "-m", "pytest", "-q"]]
+    hidden:
+      argv: ["python", "-c", "from csv_utils import split_fields; assert split_fields('   ') == []; assert split_fields(' a, b ') == ['a', 'b']"]
+
+  - id: no-input-mutation
+    issue:
+      title: sorted_unique mutates caller input
+      body: sorted_unique must return sorted unique values without changing the list passed by the caller.
+    files:
+      collections_utils.py: |
+        def sorted_unique(values: list[int]) -> list[int]:
+            values.sort()
+            return list(dict.fromkeys(values))
+      tests/test_collections_utils.py: |
+        from collections_utils import sorted_unique
+
+        def test_result_is_sorted_unique():
+            assert sorted_unique([3, 1, 3]) == [1, 3]
+      pyproject.toml: |
+        [tool.pytest.ini_options]
+        testpaths = ["tests"]
+    verify: [["python", "-m", "pytest", "-q"]]
+    hidden:
+      argv: ["python", "-c", "from collections_utils import sorted_unique; x=[2,1,2]; assert sorted_unique(x)==[1,2]; assert x==[2,1,2]"]
+
+  - id: stable-slug
+    issue:
+      title: Slugs contain repeated separators
+      body: slugify should collapse every run of non-alphanumeric characters to one dash and remove leading or trailing dashes.
+    files:
+      slug.py: |
+        def slugify(value: str) -> str:
+            return value.lower().replace(" ", "-")
+      tests/test_slug.py: |
+        from slug import slugify
+
+        def test_spaces():
+            assert slugify("Hello World") == "hello-world"
+      pyproject.toml: |
+        [tool.pytest.ini_options]
+        testpaths = ["tests"]
+    verify: [["python", "-m", "pytest", "-q"]]
+    hidden:
+      argv: ["python", "-c", "from slug import slugify; assert slugify(' Hello___world!! ') == 'hello-world'; assert slugify('---') == ''"]
+
+  - id: cache-zero
+    issue:
+      title: Cache misses for stored falsy values
+      body: MemoryCache.get incorrectly treats 0, False, and empty strings as missing. It should only use the default when the key is absent.
+    files:
+      cache.py: |
+        class MemoryCache:
+            def __init__(self):
+                self.data = {}
+
+            def get(self, key, default=None):
+                return self.data.get(key) or default
+      tests/test_cache.py: |
+        from cache import MemoryCache
+
+        def test_missing_uses_default():
+            assert MemoryCache().get("missing", 3) == 3
+      pyproject.toml: |
+        [tool.pytest.ini_options]
+        testpaths = ["tests"]
+    verify: [["python", "-m", "pytest", "-q"]]
+    hidden:
+      argv: ["python", "-c", "from cache import MemoryCache; c=MemoryCache(); c.data['n']=0; c.data['b']=False; assert c.get('n',9)==0; assert c.get('b',True) is False"]
+
+  - id: parse-boolean
+    issue:
+      title: Boolean configuration parser accepts arbitrary text
+      body: parse_bool must accept true/false, yes/no, and 1/0 case-insensitively. Any other value must raise ValueError instead of becoming truthy.
+    files:
+      config_utils.py: |
+        def parse_bool(value: str) -> bool:
+            return bool(value)
+      tests/test_config_utils.py: |
+        import pytest
+        from config_utils import parse_bool
+
+        def test_false_string():
+            assert parse_bool("false") is False
+      pyproject.toml: |
+        [tool.pytest.ini_options]
+        testpaths = ["tests"]
+    verify: [["python", "-m", "pytest", "-q"]]
+    hidden:
+      argv: ["python", "-c", "from config_utils import parse_bool; assert parse_bool(' YES ') is True; assert parse_bool('0') is False;\ntry: parse_bool('maybe')\nexcept ValueError: pass\nelse: raise AssertionError('expected ValueError')"]
+
+  - id: chunk-pagination
+    issue:
+      title: chunked drops the final partial page
+      body: chunked(values, size) should include a final short chunk and reject non-positive sizes with ValueError.
+    files:
+      paging.py: |
+        def chunked(values: list, size: int) -> list[list]:
+            return [values[i:i + size] for i in range(0, len(values) - size + 1, size)]
+      tests/test_paging.py: |
+        from paging import chunked
+
+        def test_full_chunks():
+            assert chunked([1, 2, 3, 4], 2) == [[1, 2], [3, 4]]
+      pyproject.toml: |
+        [tool.pytest.ini_options]
+        testpaths = ["tests"]
+    verify: [["python", "-m", "pytest", "-q"]]
+    hidden:
+      argv: ["python", "-c", "from paging import chunked; assert chunked([1,2,3],2)==[[1,2],[3]];\ntry: chunked([1],0)\nexcept ValueError: pass\nelse: raise AssertionError('expected ValueError')"]

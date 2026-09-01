@@ -11,6 +11,7 @@ Docs: https://docs.github.com/rest/issues/issues
 from __future__ import annotations
 
 import os
+import time
 
 import requests
 
@@ -38,17 +39,34 @@ class GitHubClient:
         self.base_url = base_url
 
     # ── low-level ──────────────────────────────────────────
+    def _request(self, method: str, path: str, **kw):
+        """One request, with retries for transient network errors.
+
+        Transport errors (SSL reset, timeouts, connection refused) become
+        GitHubApiError so tool handlers surface them to the model instead of
+        crashing the loop. HTTP errors are handled by _handle().
+        """
+        last = None
+        for attempt in range(3):
+            try:
+                r = self.session.request(method, f"{self.base_url}{path}",
+                                         timeout=30, **kw)
+                return r
+            except requests.RequestException as e:
+                last = e
+                if attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+        raise GitHubApiError(
+            f"GitHub API {method} {path} network error after 3 tries: {last}")
+
     def _get(self, path: str, params: dict | None = None):
-        r = self.session.get(f"{self.base_url}{path}", params=params, timeout=30)
-        return self._handle(r)
+        return self._handle(self._request("GET", path, params=params))
 
     def _post(self, path: str, payload: dict | None = None):
-        r = self.session.post(f"{self.base_url}{path}", json=payload, timeout=30)
-        return self._handle(r)
+        return self._handle(self._request("POST", path, json=payload))
 
     def _patch(self, path: str, payload: dict | None = None):
-        r = self.session.patch(f"{self.base_url}{path}", json=payload, timeout=30)
-        return self._handle(r)
+        return self._handle(self._request("PATCH", path, json=payload))
 
     def _handle(self, r: requests.Response):
         if not r.ok:

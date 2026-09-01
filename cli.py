@@ -7,8 +7,7 @@ Usage:
     python cli.py triage <repo> [--limit N]   # agent triages open issues
     python cli.py interactive [repo]          # REPL over the agent loop
 
-Current slice (milestone 0): the triage loop. Memory / compaction /
-task system / multi-agent get wired in here as their modules land.
+Milestone 1 wired in: skills (s07) + compact (s08) + memory (s09).
 """
 from __future__ import annotations
 
@@ -25,8 +24,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.loop import AgentLoop
 from core.permissions import default_policy
+from context.compact import Compactor
+from context.skills import SkillRegistry
 from github.api import GitHubClient
 from github.tools import build_github_tools
+from memory.memory import MemoryStore
 
 load_dotenv(override=True)
 if os.getenv("ANTHROPIC_BASE_URL"):
@@ -45,27 +47,48 @@ MODEL = os.getenv("MODEL_ID", "claude-sonnet-4-6")
 
 # ── build the harness ─────────────────────────────────────
 def build_loop(repo: str, interactive: bool) -> AgentLoop:
+    llm = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
     registry = build_github_tools(GitHubClient())
+
+    # s07: two-level skill loading (catalog in system prompt, content via load_skill).
+    skills = SkillRegistry(Path(__file__).parent / "skills")
+    registry.register(
+        "load_skill", "Load a skill's full instructions into context.",
+        {"name": {"type": "string"}}, ["name"], skills.load_skill,
+    )
+
+    # s09: per-repo memory store (data lives under .memory/, gitignored).
+    memory = MemoryStore(Path(".memory") / repo.replace("/", "_"),
+                         client=llm, model=MODEL)
+
+    # s08: four-layer compaction pipeline.
+    compactor = Compactor(client=llm, model=MODEL,
+                          persist_dir=Path(".task_outputs/tool-results"),
+                          transcript_dir=Path(".transcripts"))
+
     return AgentLoop(
-        client=Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL")),
+        client=llm,
         model=MODEL,
-        system=_system_prompt(repo),
+        system=_build_system(repo, skills, memory),
         tools=registry.schemas,
         handlers=registry.handlers,
         permissions=default_policy(interactive=interactive),
+        memory=memory,
+        compactor=compactor,
     )
 
 
-def _system_prompt(repo: str) -> str:
+def _build_system(repo: str, skills: SkillRegistry, memory: MemoryStore) -> str:
     return (
         f"You are gh-assistant, a GitHub repository maintenance agent.\n"
-        f"Working repo: {repo}\n"
-        f"You can read repo metadata and issues; with approval you can "
-        f"label and comment.\n"
-        f"Your job: classify open issues (bug/feature/question), suggest "
-        f"labels, and when confident write a short triage comment.\n"
-        f"Read before you write. Never close an issue without explicit "
-        f"user approval.\n"
+        f"Working repo: {repo}\n\n"
+        f"Skills available:\n{skills.list_skills()}\n"
+        "Load a skill with load_skill before doing specialized work.\n\n"
+        f"Repo memory index:\n{memory.index_prompt()}\n"
+        "(Relevant memory content is injected automatically when present.)\n\n"
+        "You can read repo metadata and issues freely; writing to the repo "
+        "(labels, comments, closing) needs user approval.\n"
+        "Read before you write. Never close an issue without explicit user approval.\n"
     )
 
 
@@ -100,9 +123,7 @@ def build_loop_checked(repo: str, interactive: bool) -> AgentLoop:
 
 def cmd_triage(repo: str, limit: int, interactive: bool) -> int:
     task = (f"Triage the open issues in {repo} (up to {limit}). "
-            f"For each issue: classify it (bug/feature/question), note "
-            f"anything urgent or already-fixed, and if a label is clearly "
-            f"missing, propose adding it.")
+            f"First load the triage skill, then follow it exactly.")
     loop = build_loop_checked(repo, interactive)
     messages = loop.run([{"role": "user", "content": task}])
     print_final_text(messages)

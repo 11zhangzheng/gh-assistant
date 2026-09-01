@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gh-assistant"
+version = "0.2.0"
+description = "An auditable GitHub software-engineering agent harness"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "11zhangzheng"}]
+dependencies = [
+  "anthropic>=0.40.0",
+  "openai>=1.50.0",
+  "PyYAML>=6.0",
+  "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+]
+
+[project.scripts]
+gha = "gh_assistant.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["gh_assistant*"]
+
+[tool.setuptools.package-data]
+gh_assistant = ["skills/*/SKILL.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "docker: requires a running Docker daemon",
+  "live: calls a live model or GitHub API",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["gh_assistant"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 85

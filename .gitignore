@@ -14,3 +14,10 @@ venv/
 .worktrees/
 .transcripts/
 .task_outputs/
+.gha/
+.gha-*/
+.pytest_cache/
+.pytest-tmp*/
+.cache/
+.coverage
+htmlcov/
