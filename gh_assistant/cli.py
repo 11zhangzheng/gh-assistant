@@ -64,6 +64,7 @@ def _dispatch(args, settings: Settings) -> int:
             settings,
             state=state,
             approval_callback=_approval_prompt if settings.interactive else None,
+            dry_run=args.dry_run,
         )
         run = workflow.start(args.repo, limit=args.limit)
         return _print_run(state, run)
@@ -74,6 +75,7 @@ def _dispatch(args, settings: Settings) -> int:
                 settings,
                 state=state,
                 approval_callback=_approval_prompt if settings.interactive else None,
+                dry_run=bool(run["config"].get("dry_run", False)),
             )
         else:
             settings.executor = run["config"].get("executor_preference", settings.executor)
@@ -157,6 +159,9 @@ def _parser() -> argparse.ArgumentParser:
     triage = sub.add_parser("triage", help="triage open GitHub issues")
     triage.add_argument("repo")
     triage.add_argument("--limit", type=int, default=10)
+    triage.add_argument(
+        "--dry-run", action="store_true", help="simulate labels and comments"
+    )
     triage.add_argument("--non-interactive", action="store_true")
 
     resume = sub.add_parser("resume", help="resume a checkpointed run")

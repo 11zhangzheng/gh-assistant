@@ -9,7 +9,7 @@ from typing import Any
 from gh_assistant.agent import AgentLoop
 from gh_assistant.config import Settings
 from gh_assistant.context import ContextCompactor
-from gh_assistant.contracts import Message, RunPhase, RunStatus, ToolEffect, ToolExecution, ToolSpec
+from gh_assistant.contracts import Message, RunPhase, RunStatus, ToolEffect, ToolExecution
 from gh_assistant.github_client import GitHubClient
 from gh_assistant.policy import PermissionPolicy, PolicyContext
 from gh_assistant.providers import build_backend
@@ -26,12 +26,14 @@ class TriageWorkflow:
         backend=None,
         github=None,
         approval_callback=None,
+        dry_run: bool = False,
     ):
         self.settings = settings
         self.state = state or StateStore(settings.state_dir)
         self.backend = backend or build_backend(settings)
         self.github = github or GitHubClient(settings.github_token)
         self.approval_callback = approval_callback
+        self.dry_run = dry_run
 
     def start(self, repo: str, *, limit: int = 10) -> dict[str, Any]:
         repo_info = self.github.get_repo(repo)
@@ -43,7 +45,7 @@ class TriageWorkflow:
             repo_path=Path.cwd(),
             provider=self.backend.provider,
             model=self.backend.model,
-            config={"kind": "triage", "limit": limit},
+            config={"kind": "triage", "limit": limit, "dry_run": self.dry_run},
         )
         result = {
             "repo": {
@@ -99,8 +101,13 @@ class TriageWorkflow:
             max_tokens=self.settings.budget.max_tokens_per_call,
             approval_callback=self.approval_callback,
         )
+        dry_run_prompt = (
+            "\nDry-run mode: simulate all GitHub writes."
+            if run["config"].get("dry_run")
+            else ""
+        )
         result = loop.run(
-            system=_TRIAGE_SYSTEM,
+            system=_TRIAGE_SYSTEM + dry_run_prompt,
             messages=messages,
             start_turn=start_turn,
             start_tool_calls=start_tools,
@@ -116,6 +123,7 @@ class TriageWorkflow:
 
     def _registry(self, run: dict[str, Any]) -> ToolRegistry:
         registry = ToolRegistry()
+        dry_run = bool(run["config"].get("dry_run", False))
 
         def repo_info() -> ToolExecution:
             return ToolExecution.ok(json.dumps(run["result"]["repo"], ensure_ascii=False))
@@ -125,7 +133,9 @@ class TriageWorkflow:
 
         def get_issue(number: int) -> ToolExecution:
             issue = self.github.get_issue(run["repo"], number)
-            return ToolExecution.ok(json.dumps(_issue_summary(issue, full=True), ensure_ascii=False))
+            return ToolExecution.ok(
+                json.dumps(_issue_summary(issue, full=True), ensure_ascii=False)
+            )
 
         def list_labels() -> ToolExecution:
             return ToolExecution.ok("\n".join(run["result"]["labels"]) or "(no labels)")
@@ -134,6 +144,11 @@ class TriageWorkflow:
             unknown = sorted(set(labels) - set(run["result"]["labels"]))
             if unknown:
                 return ToolExecution.error(f"Labels do not exist: {unknown}")
+            if dry_run:
+                return ToolExecution.ok(
+                    f"Would add labels to #{issue_number}",
+                    {"labels": labels, "dry_run": True},
+                )
             added = self.github.add_labels(run["repo"], issue_number, labels)
             return ToolExecution.ok(
                 f"Added labels to #{issue_number}",
@@ -141,50 +156,44 @@ class TriageWorkflow:
             )
 
         def comment_on_issue(issue_number: int, body: str) -> ToolExecution:
+            if dry_run:
+                return ToolExecution.ok(
+                    f"Would comment on #{issue_number}",
+                    {"body": body, "dry_run": True},
+                )
             comment = self.github.comment(run["repo"], issue_number, body)
             return ToolExecution.ok(
                 f"Commented on #{issue_number}", {"url": comment.get("html_url")}
             )
 
-        empty = _schema({})
-        registry.register(ToolSpec("repo_info", "Read repository metadata.", empty, ToolEffect.READ), repo_info)
-        registry.register(ToolSpec("list_issues", "List cached open issues.", empty, ToolEffect.READ), list_issues)
-        registry.register(
-            ToolSpec(
-                "get_issue",
-                "Read one issue and its comments.",
-                _schema({"number": {"type": "integer"}}, ["number"]),
-                ToolEffect.READ,
-            ),
+        registry.add("repo_info", "Read repository metadata.", repo_info)
+        registry.add("list_issues", "List cached open issues.", list_issues)
+        registry.add(
+            "get_issue",
+            "Read one issue and its comments.",
             get_issue,
+            properties={"number": {"type": "integer"}},
+            required=("number",),
         )
-        registry.register(ToolSpec("list_labels", "List existing labels.", empty, ToolEffect.READ), list_labels)
-        registry.register(
-            ToolSpec(
-                "add_labels",
-                "Add existing labels to an issue.",
-                _schema(
-                    {
-                        "issue_number": {"type": "integer"},
-                        "labels": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-                    },
-                    ["issue_number", "labels"],
-                ),
-                ToolEffect.EXTERNAL_WRITE,
-            ),
+        registry.add("list_labels", "List existing labels.", list_labels)
+        registry.add(
+            "add_labels",
+            "Simulate adding labels." if dry_run else "Add existing labels to an issue.",
             add_labels,
+            properties={
+                "issue_number": {"type": "integer"},
+                "labels": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            },
+            required=("issue_number", "labels"),
+            effect=ToolEffect.READ if dry_run else ToolEffect.EXTERNAL_WRITE,
         )
-        registry.register(
-            ToolSpec(
-                "comment_on_issue",
-                "Post a concise triage comment.",
-                _schema(
-                    {"issue_number": {"type": "integer"}, "body": {"type": "string"}},
-                    ["issue_number", "body"],
-                ),
-                ToolEffect.EXTERNAL_WRITE,
-            ),
+        registry.add(
+            "comment_on_issue",
+            "Simulate posting a triage comment." if dry_run else "Post a concise triage comment.",
             comment_on_issue,
+            properties={"issue_number": {"type": "integer"}, "body": {"type": "string"}},
+            required=("issue_number", "body"),
+            effect=ToolEffect.READ if dry_run else ToolEffect.EXTERNAL_WRITE,
         )
         return registry
 
@@ -212,12 +221,3 @@ def _issue_summary(issue: dict[str, Any], *, full: bool = False) -> dict[str, An
             for item in issue.get("comments_data", [])[:20]
         ]
     return value
-
-
-def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": required or [],
-        "additionalProperties": False,
-    }

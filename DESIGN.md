@@ -6,6 +6,11 @@ SWE Agent 本质上是围绕概率型规划器构建的控制系统。模型应�
 的自主权；无论使用哪个模型、Prompt 如何变化、进程是否崩溃，关键不变量都必须由确定性的
 Harness 保证。
 
+核心循环受 [mini-swe-agent](https://github.com/11zhangzheng/mini-swe-agent) 启发：保持 Model 与
+Tool 接口小而明确，以线性消息历史记录轨迹，并让每个动作独立执行。`gh-assistant` 没有照搬单一
+shell 工具，因为本项目还需要展示 typed tools、权限 fail closed、worktree/Docker 隔离、持久化
+恢复、独立 Reviewer 与发布幂等；这些是面向真实 GitHub 写操作时不能交给 Prompt 保证的边界。
+
 | 模型负责 | Harness 负责 |
 | --- | --- |
 | 阅读哪些文件、建立假设、选择修复方案、生成补丁、判断何时可以交付 | 状态迁移、工具校验、路径约束、执行隔离、自动验证、预算、checkpoint、审批和发布幂等 |

@@ -15,13 +15,10 @@ from gh_assistant.contracts import (
     Message,
     RunPhase,
     RunStatus,
-    ToolEffect,
     ToolExecution,
-    ToolSpec,
 )
 from gh_assistant.executors import DockerExecutor, LocalExecutor, choose_executor
 from gh_assistant.github_client import GitHubClient
-from gh_assistant.hooks import HookBus
 from gh_assistant.policy import PermissionPolicy, PolicyContext
 from gh_assistant.providers import build_backend
 from gh_assistant.state import StateStore
@@ -302,20 +299,15 @@ class SolveWorkflow:
             )
             return ToolExecution.ok("Plan recorded. Implementation may begin.")
 
-        registry.register(
-            ToolSpec(
-                "submit_plan",
-                "Submit the implementation plan after inspecting the repository.",
-                _schema(
-                    {
-                        "summary": {"type": "string"},
-                        "tasks": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-                    },
-                    ["summary", "tasks"],
-                ),
-                ToolEffect.READ,
-            ),
+        registry.add(
+            "submit_plan",
+            "Submit the implementation plan after inspecting the repository.",
             submit_plan,
+            properties={
+                "summary": {"type": "string"},
+                "tasks": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            },
+            required=("summary", "tasks"),
         )
         checkpoint = self.state.load_checkpoint(run["id"], actor="main")
         if checkpoint:
@@ -379,20 +371,15 @@ class SolveWorkflow:
             phase_state["finished"] = True
             return ToolExecution.ok("Implementation recorded; harness verification will run next.")
 
-        registry.register(
-            ToolSpec(
-                "finish_task",
-                "Declare implementation complete and request harness-owned verification.",
-                _schema(
-                    {
-                        "summary": {"type": "string"},
-                        "risks": {"type": "array", "items": {"type": "string"}},
-                    },
-                    ["summary"],
-                ),
-                ToolEffect.READ,
-            ),
+        registry.add(
+            "finish_task",
+            "Declare implementation complete and request harness-owned verification.",
             finish_task,
+            properties={
+                "summary": {"type": "string"},
+                "risks": {"type": "array", "items": {"type": "string"}},
+            },
+            required=("summary",),
         )
         checkpoint = self.state.load_checkpoint(run["id"], actor="main")
         if checkpoint is None:
@@ -530,22 +517,17 @@ class SolveWorkflow:
             phase_state["review"] = review
             return ToolExecution.ok("Review recorded.")
 
-        registry.register(
-            ToolSpec(
-                "submit_review",
-                "Submit the independent review verdict. Reject for any correctness or safety blocker.",
-                _schema(
-                    {
-                        "verdict": {"type": "string", "enum": ["approve", "reject"]},
-                        "summary": {"type": "string"},
-                        "findings": {"type": "array", "items": {"type": "string"}},
-                        "risks": {"type": "array", "items": {"type": "string"}},
-                    },
-                    ["verdict", "summary", "findings"],
-                ),
-                ToolEffect.READ,
-            ),
+        registry.add(
+            "submit_review",
+            "Submit the independent review verdict. Reject for any correctness or safety blocker.",
             submit_review,
+            properties={
+                "verdict": {"type": "string", "enum": ["approve", "reject"]},
+                "summary": {"type": "string"},
+                "findings": {"type": "array", "items": {"type": "string"}},
+                "risks": {"type": "array", "items": {"type": "string"}},
+            },
+            required=("verdict", "summary", "findings"),
         )
         checkpoint = self.state.load_checkpoint(run["id"], actor="reviewer")
         if checkpoint:
@@ -714,7 +696,6 @@ class SolveWorkflow:
         checkpoint_state,
     ) -> AgentRunResult:
         compactor = ContextCompactor(self.state.run_dir(run["id"]) / "tool-results")
-        hooks = HookBus()
         loop = AgentLoop(
             backend=self.backend,
             registry=registry,
@@ -727,7 +708,6 @@ class SolveWorkflow:
             run_id=run["id"],
             actor=actor,
             compactor=compactor,
-            hooks=hooks,
             max_turns=self.settings.budget.max_main_turns,
             max_tool_calls=self.settings.budget.max_tool_calls,
             max_tokens=self.settings.budget.max_tokens_per_call,
@@ -963,17 +943,6 @@ def _render_verification(results: list[dict[str, Any]]) -> str:
     return "\n\n".join(
         f"$ {' '.join(item['argv'])}\n{item['content']}" for item in results
     )
-
-
-def _schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": required,
-        "additionalProperties": False,
-    }
-
-
 def _hash_json(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")

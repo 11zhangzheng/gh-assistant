@@ -9,10 +9,11 @@ import pytest
 
 from gh_assistant import cli, evaluation
 from gh_assistant.config import Settings
-from gh_assistant.contracts import ModelResponse, TextPart, ToolExecution
+from gh_assistant.contracts import ModelResponse, TextPart, ToolEffect, ToolExecution
 from gh_assistant.providers import ScriptedBackend
 from gh_assistant.state import StateStore
-from gh_assistant.triage import TriageWorkflow, _issue_summary, _schema
+from gh_assistant.tools import object_schema
+from gh_assistant.triage import TriageWorkflow, _issue_summary
 
 
 class TriageGitHub:
@@ -96,7 +97,32 @@ def test_triage_helpers_bound_untrusted_content():
     assert len(value["body"]) == 50_000
     assert len(value["comments"]) == 20
     assert value["comments"][0]["author"] == "unknown"
-    assert _schema({})["additionalProperties"] is False
+    assert object_schema({})["additionalProperties"] is False
+
+
+def test_triage_dry_run_persists_and_never_writes(tmp_path: Path):
+    settings = Settings(provider="scripted", model="test", state_dir=tmp_path / "state")
+    github = TriageGitHub()
+    workflow = TriageWorkflow(
+        settings,
+        state=StateStore(settings.state_dir),
+        backend=ScriptedBackend([ModelResponse([TextPart("previewed")])]),
+        github=github,
+        dry_run=True,
+    )
+    run = workflow.start("owner/repo")
+    registry = workflow._registry(run)
+
+    labels = registry.execute("add_labels", {"issue_number": 1, "labels": ["bug"]})
+    comment = registry.execute("comment_on_issue", {"issue_number": 1, "body": "hello"})
+
+    assert run["config"]["dry_run"] is True
+    assert labels.data == {"labels": ["bug"], "dry_run": True}
+    assert comment.data == {"body": "hello", "dry_run": True}
+    assert registry.spec("add_labels").effect == ToolEffect.READ
+    assert registry.spec("comment_on_issue").effect == ToolEffect.READ
+    assert github.added == []
+    assert github.comments == []
 
 
 def _manifest(path: Path) -> Path:
@@ -272,7 +298,8 @@ def test_cli_dispatches_solve_triage_and_resume(tmp_path: Path, monkeypatch):
     }
     triage_run = {
         "id": "triage", "status": "succeeded", "phase": "done",
-        "repo": "o/r", "issue_number": 0, "result": {}, "config": {"kind": "triage"},
+        "repo": "o/r", "issue_number": 0, "result": {},
+        "config": {"kind": "triage", "dry_run": True},
     }
     FakeCliState.runs = [solve_run, triage_run]
     FakeCliState.approvals = []
@@ -285,17 +312,37 @@ def test_cli_dispatches_solve_triage_and_resume(tmp_path: Path, monkeypatch):
         def resume(self, run_id): return solve_run
 
     class FakeTriage:
-        def __init__(self, settings, **kwargs): pass
-        def start(self, repo, limit): return triage_run
-        def resume(self, run_id): return triage_run
+        dry_runs = []
+
+        def __init__(self, settings, **kwargs):
+            self.dry_runs.append(kwargs["dry_run"])
+
+        def start(self, repo, limit):
+            return triage_run
+
+        def resume(self, run_id):
+            return triage_run
 
     monkeypatch.setattr(cli, "SolveWorkflow", FakeSolve)
     monkeypatch.setattr(cli, "TriageWorkflow", FakeTriage)
     settings = Settings(provider="scripted", model="fake", state_dir=tmp_path)
-    assert cli._dispatch(_args("solve", repo="o/r", issue=1, path=str(tmp_path), base="", profile="full", no_publish=True), settings) == 0
-    assert cli._dispatch(_args("triage", repo="o/r", limit=2), settings) == 0
+    solve_args = _args(
+        "solve",
+        repo="o/r",
+        issue=1,
+        path=str(tmp_path),
+        base="",
+        profile="full",
+        no_publish=True,
+    )
+    assert cli._dispatch(solve_args, settings) == 0
+    assert cli._dispatch(_args("triage", repo="o/r", limit=2, dry_run=False), settings) == 0
     assert cli._dispatch(_args("resume", run_id="solve"), settings) == 0
     assert cli._dispatch(_args("resume", run_id="triage"), settings) == 0
+    assert FakeTriage.dry_runs == [False, True]
+
+    parsed = cli._parser().parse_args(["triage", "o/r", "--dry-run"])
+    assert parsed.dry_run is True
 
 
 def test_cli_main_error_interrupt_and_approval(monkeypatch, capsys):

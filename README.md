@@ -90,7 +90,7 @@ python -m gh_assistant --state-dir .gha runs
 | 命令 | 作用 |
 | --- | --- |
 | `gha doctor [--repo OWNER/REPO]` | 检查 Python、Git、Docker、模型、GitHub 和状态库 |
-| `gha triage OWNER/REPO` | 读取并分类开放 Issue，写操作必须审批 |
+| `gha triage OWNER/REPO [--dry-run]` | 分类开放 Issue；可只预览 label/comment 而不写入 GitHub |
 | `gha solve OWNER/REPO ISSUE --path PATH` | 启动完整的隔离修复流程 |
 | `gha resume RUN_ID` | 从 checkpoint 或待审批状态恢复 |
 | `gha runs` | 查看持久化的运行记录 |
@@ -141,7 +141,7 @@ python -m coverage run --branch -m pytest -q
 python -m coverage report --fail-under=85
 ```
 
-当前本地结果：**58 passed、2 skipped、86% branch coverage**。两个 skip 分别是 Docker daemon
+当前本地结果：**59 passed、2 skipped、86% branch coverage**。两个 skip 分别是 Docker daemon
 未启动，以及 Windows 当前权限无法创建 symlink；两项都不会伪装成通过。
 
 项目包含 8 个 Python fixture issue：
@@ -173,5 +173,5 @@ benchmarks/          8 个确定性修复任务
 tests/               单元、集成、恢复、安全、报告与评测测试
 ```
 
-早期学习代码仍保留在 `core/`、`context/`、`memory/`、`skills/` 和 `github/` 中，正式产品实现位于
-`gh_assistant/`。
+仓库只保留 `gh_assistant/` 这一套正式实现，CLI、测试和文档共享同一事实来源，避免教学原型与产品
+代码并行演化。

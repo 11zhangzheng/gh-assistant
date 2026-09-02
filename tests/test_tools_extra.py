@@ -10,8 +10,8 @@ from gh_assistant.contracts import ToolEffect, ToolExecution, ToolSpec
 from gh_assistant.tools import (
     ToolRegistry,
     ToolValidationError,
-    _object_schema,
     build_workspace_tools,
+    object_schema,
     safe_path,
     validate_arguments,
 )
@@ -38,7 +38,7 @@ def _skills(tmp_path: Path) -> SkillRegistry:
 def test_registry_registration_subset_validation_and_handler_errors():
     registry = ToolRegistry()
     spec = ToolSpec(
-        "echo", "echo", _object_schema({"value": {"type": "string"}}, ["value"]), ToolEffect.READ
+        "echo", "echo", object_schema({"value": {"type": "string"}}, ("value",)), ToolEffect.READ
     )
     registry.register(spec, lambda value: ToolExecution.ok(value))
     assert registry.specs == [spec]
@@ -55,8 +55,18 @@ def test_registry_registration_subset_validation_and_handler_errors():
         )
 
     exploding = ToolRegistry()
-    exploding.register(ToolSpec("boom", "", _object_schema({}), ToolEffect.READ), lambda: 1 / 0)
+    exploding.register(ToolSpec("boom", "", object_schema({}), ToolEffect.READ), lambda: 1 / 0)
     assert "ZeroDivisionError" in exploding.execute("boom", {}).content
+
+    concise = ToolRegistry()
+    concise.add(
+        "echo",
+        "echo",
+        lambda value: ToolExecution.ok(value),
+        properties={"value": {"type": "string"}},
+        required=("value",),
+    )
+    assert concise.execute("echo", {"value": "short"}).content == "short"
 
 
 def test_workspace_file_search_patch_command_git_and_skills(tmp_path: Path):
