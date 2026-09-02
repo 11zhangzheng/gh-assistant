@@ -46,9 +46,13 @@ MODEL = os.getenv("MODEL_ID", "claude-sonnet-4-6")
 
 
 # ── build the harness ─────────────────────────────────────
-def build_loop(repo: str, interactive: bool) -> AgentLoop:
+def build_loop(repo: str, interactive: bool, dry_run: bool = False) -> AgentLoop:
+    """Construct the AgentLoop for `repo`.
+
+    dry_run: when True, GitHub write operations are simulated (no API writes).
+    """
     llm = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
-    registry = build_github_tools(GitHubClient())
+    registry = build_github_tools(GitHubClient(dry_run=dry_run))
 
     # s07: two-level skill loading (catalog in system prompt, content via load_skill).
     skills = SkillRegistry(Path(__file__).parent / "skills")
@@ -82,10 +86,13 @@ def _build_system(repo: str, skills: SkillRegistry, memory: MemoryStore) -> str:
     return (
         f"You are gh-assistant, a GitHub repository maintenance agent.\n"
         f"Working repo: {repo}\n\n"
+
         f"Skills available:\n{skills.list_skills()}\n"
         "Load a skill with load_skill before doing specialized work.\n\n"
+
         f"Repo memory index:\n{memory.index_prompt()}\n"
         "(Relevant memory content is injected automatically when present.)\n\n"
+
         "You can read repo metadata and issues freely; writing to the repo "
         "(labels, comments, closing) needs user approval.\n"
         "Read before you write. Never close an issue without explicit user approval.\n"
@@ -112,19 +119,19 @@ def cmd_ping(repo: str) -> int:
         return 1
 
 
-def build_loop_checked(repo: str, interactive: bool) -> AgentLoop:
+def build_loop_checked(repo: str, interactive: bool, dry_run: bool = False) -> AgentLoop:
     """build_loop, but report GitHub/LLM setup errors instead of tracebacking."""
     try:
-        return build_loop(repo, interactive)
+        return build_loop(repo, interactive, dry_run=dry_run)
     except Exception as e:
         print(f"Setup error: {e}")
         sys.exit(1)
 
 
-def cmd_triage(repo: str, limit: int, interactive: bool) -> int:
+def cmd_triage(repo: str, limit: int, interactive: bool, dry_run: bool = False) -> int:
     task = (f"Triage the open issues in {repo} (up to {limit}). "
             f"First load the triage skill, then follow it exactly.")
-    loop = build_loop_checked(repo, interactive)
+    loop = build_loop_checked(repo, interactive, dry_run=dry_run)
     messages = loop.run([{"role": "user", "content": task}])
     print_final_text(messages)
     return 0
@@ -159,6 +166,8 @@ def main() -> int:
     triage.add_argument("--limit", type=int, default=10)
     triage.add_argument("--non-interactive", action="store_true",
                         help="deny any write op without asking")
+    triage.add_argument("--dry-run", action="store_true",
+                        help="show proposed labels/comments but do not write to GitHub")
 
     repl = sub.add_parser("interactive", help="REPL over the agent loop")
     repl.add_argument("repo", nargs="?", default=os.getenv("GHA_REPO", ""))
@@ -170,7 +179,7 @@ def main() -> int:
         return cmd_ping(args.repo)
     if args.cmd == "triage":
         interactive = not args.non_interactive
-        return cmd_triage(args.repo, args.limit, interactive)
+        return cmd_triage(args.repo, args.limit, interactive, dry_run=args.dry_run)
     if args.cmd == "interactive":
         if not args.repo:
             print("interactive needs a repo (or set GHA_REPO in .env)")
