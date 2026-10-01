@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -51,7 +52,10 @@ class LocalExecutor:
         command, workdir, process_env = _prepare_command(
             self.workspace, argv, cwd, timeout_seconds, env
         )
-        if Path(command[0]).name.lower() in {"python", "python3", "python.exe", "python3.exe"}:
+        executable_name = Path(command[0]).name.lower()
+        if executable_name in {"python", "python3", "python.exe", "python3.exe"} or re.fullmatch(
+            r"python3\.\d+(?:\.exe)?", executable_name
+        ):
             if command[0] in {"python", "python3"}:
                 command[0] = sys.executable
             with tempfile.TemporaryDirectory(prefix="gha-pycache-") as cache_dir:

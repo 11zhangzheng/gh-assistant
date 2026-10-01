@@ -156,6 +156,23 @@ def test_local_python_execution_ignores_stale_same_timestamp_bytecode(tmp_path: 
     assert not result.is_error, result.content
 
 
+def test_local_executor_isolates_versioned_python_executable(tmp_path: Path, monkeypatch):
+    observed = {}
+
+    def capture_process(command, cwd, env, timeout_seconds):
+        observed.update(env)
+        return ToolExecution.ok("ok")
+
+    monkeypatch.setattr(executors, "_run_process", capture_process)
+    result = LocalExecutor(tmp_path, approved=True).run(
+        ["/usr/bin/python3.12", "-c", "pass"]
+    )
+
+    assert not result.is_error
+    assert observed.get("PYTHONPYCACHEPREFIX")
+    assert observed.get("PYTHONDONTWRITEBYTECODE") == "1"
+
+
 def test_process_timeout_and_docker_command_is_hardened(tmp_path: Path, monkeypatch):
     def timeout(*args, **kwargs):
         raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout", 1), output="partial")
