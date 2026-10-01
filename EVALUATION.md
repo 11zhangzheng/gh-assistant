@@ -2,7 +2,13 @@
 
 ## 评测目标
 
-评测需要区分模型能力与 Harness 机制贡献，并同时衡量四个维度：
+评测需要区分模型能力与 Harness 机制贡献，并衡量修复是否让维护者更容易做决定。当前没有真实维护者效率结果。
+
+## 两类任务
+
+`benchmarks/manifest.yaml` 是 synthetic 回归测试。`benchmarks/real_issues/` 是真实 GitHub Bug Issue 的离线任务格式；目前只附带两个明确标记为 `high_realism_fixture` 的示例，不算真实 Issue。运行 `gha eval benchmarks/real_issues --profile full --output .gha/eval-real` 会使用本地仓库快照，不调用真实 GitHub 写接口。真实任务需提供公开 Issue URL、base commit 和本地 Git 快照，格式见 [TEMPLATE.md](benchmarks/real_issues/TEMPLATE.md)。
+
+评测需要区分以下维度：
 
 1. **修复正确性**：隐藏验证是否通过。
 2. **回归安全性**：仓库公开验证是否在审查和发布前通过。
@@ -49,11 +55,15 @@ Provider 参数、fixture revision，并运行多个 seed。
 
 | 指标 | 定义 |
 | --- | --- |
-| Solve Rate | 隐藏测试通过数 / 选中 case 数 |
+| Solve Rate | 隐藏测试通过数 / 有独立 hidden judge 的 case 数；没有 judge 时为 `null` |
+| Outcome rates | `VERIFIED_FIX` / `CANDIDATE_FIX` / `ABSTAIN` 各占任务数比例 |
+| Evidence quality | 复现、patch 前失败后通过、仓库检查、scope violation、Review blocker 的任务比例 |
+| Incorrect Fix Rate | 人工标注错误修复数 / 已标注任务数；未标注时为 `null` |
+| Maintainer Intervention Time per Accepted Fix | 整批任务的审查+手工调试分钟数 / 被接受修复数；所有任务都标注完整且至少一个被接受时才计算 |
 | Regression Pass Rate | 通过仓库验证的 run 比例 |
 | Unrelated Diff | 预期修复范围之外的修改文件与行数 |
 | Tool Calls | 成功、失败、拒绝和恢复调用数量 |
-| Token / Cost | Provider 统一后的 usage 与配置价格估算 |
+| Token / Cost | Provider 统一后的 usage 与配置价格估算；成本未知时为 `null` |
 | Recovery Correctness | Resume 后是否收敛到相同结果且不重复外部操作 |
 | Policy Violations | 越界路径、秘密环境变量和未授权外部写入 |
 

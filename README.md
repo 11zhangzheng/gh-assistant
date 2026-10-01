@@ -1,11 +1,8 @@
 # gh-assistant
 
-一个能够**自动分析 GitHub Issue、修改代码、运行测试、独立审查，并在审批后创建 Draft PR**
-的可审计 SWE Agent。
+面向中小型 Python 开源仓库维护者的 Bug Issue 修复助手：尝试复现问题、修改代码，并给出支持或拒绝修复的证据。
 
-它不是一个简单的「LLM + 工具调用」Demo，而是一套面向真实软件仓库的 Agent Harness：模型负责
-探索、推理和实现，Harness 负责上下文、工具、安全隔离、权限审批、状态持久化、崩溃恢复、评测
-与可观测性。
+目标是把 Issue 推进到**可决策状态**，降低维护者判断修复是否值得继续处理的成本。系统将结果区分为 `VERIFIED_FIX`（本地证据齐全）、`CANDIDATE_FIX`（有补丁但仍需人工验证）和 `ABSTAIN`（证据或修复条件不足，主动停止）。目前尚无真实维护者效率提升数据。
 
 [架构设计](DESIGN.md) | [安全模型](SECURITY.md) | [评测体系](EVALUATION.md) | [Docker 执行器](docker/README.md)
 
@@ -15,18 +12,18 @@
 
 1. 获取 Issue、评论和仓库信息，并将这些内容视为不可信输入。
 2. 为本次任务创建独立 branch 和 Git worktree，不修改用户当前 checkout。
-3. 让主 Agent 自主阅读代码、搜索调用关系、制定计划并提交结构化补丁。
-4. 由 Harness 自动执行项目测试，而不是相信模型声称「测试已通过」。
+3. 让主 Agent 阅读代码并提交计划；有复现命令时，由 Harness 在修改前记录实际失败及预期失败特征。
+4. Agent 修改代码后，Harness 运行 targeted regression 和仓库验证命令，保存前后结果。
 5. 测试失败时把真实证据交回主 Agent，最多进行两轮修复。
 6. 测试通过后启动干净上下文、只读权限的 Reviewer 独立检查 Issue、diff 和测试证据。
-7. Reviewer 驳回时允许一轮返工；通过后生成本地结果和可审计报告。
-8. 在用户批准与当前 commit/diff 绑定的发布请求后，push 分支并幂等创建 Draft PR。
+7. Reviewer 驳回时允许一轮返工；Evidence Gate 结合复现、回归、仓库检查、修改范围和 Review 决定 Outcome。
+8. `ABSTAIN` 不发布；`CANDIDATE_FIX` 可在审批后生成显著标注需人工验证的 Draft PR。JSON/HTML 报告列出未验证结论。
 
 ```text
 GitHub Issue
      |
      v
-隔离 Worktree -> 分析与计划 -> 修改代码 -> Harness 测试
+隔离 Worktree -> 分析与复现 -> 修改代码 -> Harness 验证
                                       |          |
                                       |          +-- 失败 -> 修复
                                       v
@@ -34,7 +31,11 @@ GitHub Issue
                                       |
                                通过 / 一轮返工
                                       |
-                               哈希绑定的审批
+                              Evidence Outcome Gate
+                               /       |        \
+                          VERIFIED  CANDIDATE  ABSTAIN
+                               \       /        (停止)
+                                人工审批
                                       |
                                Push + Draft PR
 ```
@@ -56,6 +57,7 @@ GitHub Issue
   去重。
 - **可展示报告**：输出脱敏 JSON 与单文件 HTML，记录阶段、工具、测试、审查、审批、重试、token
   和可配置成本。
+- **证据门禁**：`gh_assistant/evidence.py` 统一判断 Outcome；没有验证命令、缺少 patch 前失败/patch 后通过证据、缺少 Review 或越出计划范围，都不能成为 `VERIFIED_FIX`。默认允许“本地已验证”，但报告始终明确 CI 尚未运行；设置 `GHA_ALLOW_LOCAL_VERIFIED=false` 可要求 CI PASS 才给予 VERIFIED 结果（当前尚无 CI 反馈闭环，因而会降为 Candidate）。
 
 ## 快速开始
 
@@ -141,18 +143,22 @@ python -m coverage run --branch -m pytest -q
 python -m coverage report --fail-under=85
 ```
 
-当前本地结果：**59 passed、2 skipped、86% branch coverage**。两个 skip 分别是 Docker daemon
-未启动，以及 Windows 当前权限无法创建 symlink；两项都不会伪装成通过。
+测试结果以当前机器实际运行输出为准；Docker 不可用或 symlink 权限不足的测试会显式 skip。
 
-项目包含 8 个 Python fixture issue：
+`benchmarks/manifest.yaml` 保留 8 个 synthetic fixture，用于检验 Harness 回归行为：
 
 ```powershell
 gha eval benchmarks/manifest.yaml --profile baseline --output .gha/eval
 gha eval benchmarks/manifest.yaml --profile full --output .gha/eval
 ```
 
-`baseline` 与 `full` 使用相同模型、worktree、验证和安全层；baseline 关闭 skills、memory 与
-Reviewer，用于衡量 Harness 机制本身带来的收益。
+`benchmarks/real_issues/` 提供真实 Issue 的离线 task schema 和两个明确标记为**高真实性示例、并非真实 GitHub Issue**的任务：
+
+```powershell
+gha eval benchmarks/real_issues --profile full --output .gha/eval-real
+```
+
+真实 Issue 任务需要公开 Issue URL、固定 base commit 与本地 Git 快照；格式见 [任务模板](benchmarks/real_issues/TEMPLATE.md)。`solve_rate` 只统计拥有独立 hidden judge 的任务。评测还记录三态 Outcome、证据覆盖、耗时、调用和可用的成本数据；维护者审查分钟数等人工指标需要手工标注，不会自动编造。`baseline` 关闭 Skills、Memory 和 Reviewer，因此不会满足 `VERIFIED_FIX` 的 Review 条件，仍可用于比较 hidden judge 通过率。
 
 ## 为什么 MVP 不加入更多功能
 
@@ -169,7 +175,7 @@ Reviewer，用于衡量 Harness 机制本身带来的收益。
 gh_assistant/        正式 Agent Harness 实现
 gh_assistant/skills  内置可信 Skills
 docker/              受限 Python Runner
-benchmarks/          8 个确定性修复任务
+benchmarks/          8 个 synthetic 任务和真实 Issue 离线任务格式/高真实性示例
 tests/               单元、集成、恢复、安全、报告与评测测试
 ```
 

@@ -89,6 +89,13 @@ def git_status(worktree: Path) -> str:
     return _git(worktree, ["status", "--short"]) or "(clean)"
 
 
+def changed_files(worktree: Path) -> list[str]:
+    """Return tracked edits and untracked files without parsing porcelain status prefixes."""
+    tracked = _git(worktree, ["diff", "--name-only", "--no-ext-diff", "HEAD"])
+    untracked = _git(worktree, ["ls-files", "--others", "--exclude-standard"])
+    return sorted(set(tracked.splitlines() + untracked.splitlines()) - {""})
+
+
 def git_diff(worktree: Path, *, max_chars: int = 80_000) -> str:
     tracked = _git(worktree, ["diff", "--no-ext-diff", "--binary", "HEAD"])
     untracked = _git(worktree, ["ls-files", "--others", "--exclude-standard"]).splitlines()

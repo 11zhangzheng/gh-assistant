@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from gh_assistant.contracts import Message
+from gh_assistant.evidence import empty_evidence
 from gh_assistant.report import generate_report
 from gh_assistant.state import StateStore, redact_text, redact_value
 
@@ -84,3 +85,25 @@ def test_redact_value_preserves_token_counters_but_hides_credentials():
     assert value["input_tokens"] == 12
     assert value["max_tokens"] == 100
     assert value["github_token"] == "[REDACTED]"
+
+
+def test_evidence_report_exposes_decision_without_leaking_command_output(tmp_path: Path):
+    state = StateStore(tmp_path / "state")
+    run = state.create_run(repo="owner/repo", issue_number=3, repo_path=tmp_path, provider="scripted", model="test", config={})
+    evidence = empty_evidence()
+    evidence["expected_behavior"] = "Empty input returns an empty list"
+    evidence["reproduction"].update(status="PASS", command=["python", "-m", "pytest"], before={"status": "FAIL", "output": "ghp_abcdefghijk123456", "exit_code": 1})
+    evidence["regression"]["before"] = {"status": "FAIL", "output": "private traceback", "exit_code": 1}
+    evidence["unverified_claims"] = ["Windows behavior"]
+    state.update_run(run["id"], result_json={"outcome": "CANDIDATE_FIX", "outcome_reasons": ["Missing checks"], "evidence": evidence}, status="completed_local")
+    json_path, html_path = generate_report(state, run["id"])
+    json_text = json_path.read_text(encoding="utf-8")
+    html_text = html_path.read_text(encoding="utf-8")
+    assert '"outcome": "CANDIDATE_FIX"' in json_text
+    assert "Windows behavior" in json_text
+    assert "private traceback" not in json_text
+    assert "ghp_abcdefghijk123456" not in json_text
+    assert "Human verification required" in html_text
+    assert "Expected Behavior" in html_text
+    _, detailed_html = generate_report(state, run["id"], output_dir=tmp_path / "detailed", include_content=True)
+    assert "private traceback" in detailed_html.read_text(encoding="utf-8")

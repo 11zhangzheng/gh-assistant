@@ -80,6 +80,7 @@ def _dispatch(args, settings: Settings) -> int:
         else:
             settings.executor = run["config"].get("executor_preference", settings.executor)
             settings.docker_image = run["config"].get("docker_image", settings.docker_image)
+            settings.allow_local_verified = bool(run["config"].get("allow_local_verified", settings.allow_local_verified))
             workflow = SolveWorkflow(
                 settings,
                 state=state,

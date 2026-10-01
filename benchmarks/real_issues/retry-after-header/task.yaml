@@ -1,0 +1,20 @@
+id: retry-after-header
+repo: fixture/retry-after-header
+issue_number: 2
+issue_url: null
+base_commit: null
+language: python
+issue_type: bug
+issue_title: Retry-After header lookup is case sensitive
+reproduction:
+  available: true
+  command: [python, -m, pytest, -q, tests/test_regression.py]
+verification:
+  targeted: [python, -m, pytest, -q, tests/test_regression.py]
+  repository:
+    - [python, -m, pytest, -q]
+  hidden: [python, -c, "from retry_policy import retry_delay; assert retry_delay({'retry-after':'7'}, default=1)==7; assert retry_delay({'RETRY-AFTER':'0'}, default=1)==0"]
+metadata:
+  source: high_realism_fixture
+  difficulty: easy
+human: {}

@@ -51,8 +51,9 @@ class LocalExecutor:
         command, workdir, process_env = _prepare_command(
             self.workspace, argv, cwd, timeout_seconds, env
         )
-        if command[0] in {"python", "python3"}:
-            command[0] = sys.executable
+        if Path(command[0]).name.lower() in {"python", "python3", "python.exe", "python3.exe"}:
+            if command[0] in {"python", "python3"}:
+                command[0] = sys.executable
             with tempfile.TemporaryDirectory(prefix="gha-pycache-") as cache_dir:
                 process_env["PYTHONPYCACHEPREFIX"] = cache_dir
                 process_env["PYTHONDONTWRITEBYTECODE"] = "1"

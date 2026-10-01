@@ -48,6 +48,7 @@ class Settings:
     executor: str = "auto"
     docker_image: str = "gh-assistant-python:3.12"
     interactive: bool = True
+    allow_local_verified: bool = True
     input_cost_per_million: float | None = None
     output_cost_per_million: float | None = None
     budget: BudgetConfig = field(default_factory=BudgetConfig)
@@ -69,6 +70,7 @@ class Settings:
             state_dir=Path(state_dir or os.getenv("GHA_STATE_DIR", ".gha")),
             executor=os.getenv("GHA_EXECUTOR", "auto").lower(),
             docker_image=os.getenv("GHA_DOCKER_IMAGE", "gh-assistant-python:3.12"),
+            allow_local_verified=os.getenv("GHA_ALLOW_LOCAL_VERIFIED", "true").lower() in {"1", "true", "yes"},
             input_cost_per_million=_optional_float(os.getenv("GHA_INPUT_COST_PER_MILLION")),
             output_cost_per_million=_optional_float(os.getenv("GHA_OUTPUT_COST_PER_MILLION")),
         )
@@ -145,4 +147,3 @@ def _normalize_commands(value: Any) -> list[list[str]]:
 
 def _optional_float(value: str | None) -> float | None:
     return float(value) if value not in (None, "") else None
-

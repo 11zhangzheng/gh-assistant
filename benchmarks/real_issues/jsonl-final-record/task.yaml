@@ -1,0 +1,20 @@
+id: jsonl-final-record
+repo: fixture/jsonl-final-record
+issue_number: 1
+issue_url: null
+base_commit: null
+language: python
+issue_type: bug
+issue_title: JSONL reader drops final record without trailing newline
+reproduction:
+  available: true
+  command: [python, -m, pytest, -q, tests/test_regression.py]
+verification:
+  targeted: [python, -m, pytest, -q, tests/test_regression.py]
+  repository:
+    - [python, -m, pytest, -q]
+  hidden: [python, -c, "from records import read_records; from pathlib import Path; p=Path('hidden.jsonl'); p.write_text('{\"id\":1}\\n{\"id\":2}', encoding='utf-8'); assert read_records(p)==[{'id':1},{'id':2}]"]
+metadata:
+  source: high_realism_fixture
+  difficulty: easy
+human: {}

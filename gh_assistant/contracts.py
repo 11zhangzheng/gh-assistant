@@ -45,6 +45,7 @@ class RunStatus(StrEnum):
     NEEDS_HUMAN = "needs_human"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    ABSTAINED = "abstained"
 
 
 @dataclass(slots=True)

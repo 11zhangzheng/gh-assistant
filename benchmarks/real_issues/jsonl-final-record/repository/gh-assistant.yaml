@@ -1,0 +1,3 @@
+version: 1
+verify:
+  - [python, -m, pytest, -q]

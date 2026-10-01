@@ -55,6 +55,10 @@ def _build_payload(
         "pull_request": result.get("pull_request", {}),
         "needs_human_reason": result.get("needs_human_reason", ""),
         "commit_sha": result.get("commit_sha", ""),
+        "outcome": result.get("outcome", ""),
+        "outcome_reasons": result.get("outcome_reasons", []),
+        "abstain": result.get("abstain", {}),
+        "evidence": _sanitize_evidence(result.get("evidence", {}), include_content),
     }
     safe_events = []
     for event in events:
@@ -111,6 +115,7 @@ def _sanitize_verification(value: dict[str, Any], include_content: bool) -> dict
                 "exit_code": command.get("exit_code"),
                 "is_error": command.get("is_error"),
                 "unverified": command.get("unverified", False),
+                "status": command.get("status", "NOT_RUN" if command.get("unverified") else ("FAIL" if command.get("is_error") else "PASS")),
                 "content": command.get("content", "") if include_content else "[output hidden]",
             }
         )
@@ -119,6 +124,21 @@ def _sanitize_verification(value: dict[str, Any], include_content: bool) -> dict
         "unverified": value.get("unverified", False),
         "commands": commands,
     }
+
+
+def _sanitize_evidence(value: dict[str, Any], include_content: bool) -> dict[str, Any]:
+    if not value:
+        return {}
+    evidence = json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    for section in ("reproduction", "regression"):
+        for key in ("before", "after"):
+            check = evidence.get(section, {}).get(key)
+            if isinstance(check, dict) and not include_content:
+                check["output"] = "[output hidden]"
+    for check in evidence.get("repository_checks", []):
+        if not include_content:
+            check["output"] = "[output hidden]"
+    return evidence
 
 
 def _sanitize_event_payload(
@@ -190,6 +210,8 @@ def _render_html(payload: dict[str, Any]) -> str:
     usage = payload["usage"]
     verification = result.get("verification", {})
     review = result.get("review", {})
+    evidence = result.get("evidence", {})
+    outcome = result.get("outcome", "UNCLASSIFIED")
     events_json = json.dumps(payload["events"], ensure_ascii=False).replace("</", "<\\/")
     status_class = _status_class(str(run.get("status", "")))
     approval_rows = "".join(
@@ -205,10 +227,31 @@ def _render_html(payload: dict[str, Any]) -> str:
     verify_rows = "".join(
         f"<tr><td><code>{_e(' '.join(item.get('argv') or []) or 'not configured')}</code></td>"
         f"<td>{_e(str(item.get('exit_code')))}</td>"
-        f"<td>{'Failed' if item.get('is_error') else 'Passed'}</td></tr>"
+        f"<td>{_e(item.get('status', 'NOT_RUN' if item.get('unverified') else ('FAIL' if item.get('is_error') else 'PASS')))}</td></tr>"
         for item in verification.get("commands", [])
     ) or '<tr><td colspan="3" class="muted">No verification evidence</td></tr>'
     findings = "".join(f"<li>{_e(item)}</li>" for item in review.get("findings", []))
+    unverified = "".join(f"<li>{_e(item)}</li>" for item in evidence.get("unverified_claims", [])) or "<li>None recorded</li>"
+    checks = "".join(
+        f"<li>{_e(item.get('kind', 'configured'))}: {_e(item.get('status', 'NOT_RUN'))} "
+        f"<code>{_e(' '.join(item.get('command', [])))}</code></li>"
+        for item in evidence.get("repository_checks", [])
+    ) or "<li>NOT_RUN</li>"
+    regression = evidence.get("regression", {})
+    reproduction = evidence.get("reproduction", {})
+    scope = evidence.get("fix_scope", {})
+    review_evidence = evidence.get("review", {})
+    ci = evidence.get("ci", {})
+    root_cause = evidence.get("root_cause", {})
+    abstain = result.get("abstain", {})
+    abstain_details = (
+        f"<section><h2>Why the agent abstained</h2>"
+        f"<p><b>Reason:</b> {_e(abstain.get('reason', 'Not recorded'))}</p>"
+        f"<p><b>Confirmed:</b> {_e('; '.join(abstain.get('confirmed', [])) or 'None recorded')}</p>"
+        f"<p><b>Missing:</b> {_e('; '.join(abstain.get('missing', [])) or 'None recorded')}</p>"
+        f"<p><b>Next step:</b> {_e(abstain.get('next_step') or 'Ask a maintainer to inspect the evidence.')}</p></section>"
+        if outcome == "ABSTAIN" else ""
+    )
     pr = result.get("pull_request", {})
     implementation_summary = result.get("implementation", {}).get(
         "summary", "No implementation summary"
@@ -261,13 +304,29 @@ a {{ color:var(--blue); }} ul {{ margin:8px 0; padding-left:20px; }}
 <div class="stat"><b>{usage['tool_calls']}</b><span>Tool calls</span></div><div class="stat"><b>{usage['input_tokens']}</b><span>Input tokens</span></div>
 <div class="stat"><b>{usage['output_tokens']}</b><span>Output tokens</span></div><div class="stat"><b>{usage['tool_failures']}</b><span>Tool failures</span></div>
 <div class="stat"><b>{_e(usage['estimated_cost_usd'] if usage['estimated_cost_usd'] is not None else 'n/a')}</b><span>Estimated USD</span></div></div>
-<div class="band"><div class="wrap grid"><div><h2>Outcome</h2><p>{_e(implementation_summary)}</p>
+  <div class="band"><div class="wrap grid"><div><h2>Outcome: {_e(outcome)}</h2><p>{_e(implementation_summary)}</p>
+<p>{'Human verification required before merge.' if outcome == 'CANDIDATE_FIX' else ('Stopped without publishing.' if outcome == 'ABSTAIN' else 'Local evidence verified; inspect CI before merge.')}</p>
 <p><b>Verification:</b> {_e('passed' if verification.get('passed') else 'not passed')} · <b>Review:</b> {_e(review.get('verdict','not run'))}</p></div>
 <div><h2>Publication</h2><p>{pr_link}</p><p class="muted">Branch <code>{_e(run['branch'])}</code></p></div></div></div>
 <main class="wrap"><div class="grid"><section><h2>Plan</h2><table><thead><tr><th>#</th><th>Task</th><th>Status</th></tr></thead><tbody>{task_rows}</tbody></table></section>
 <section><h2>Verification</h2><table><thead><tr><th>Command</th><th>Exit</th><th>Result</th></tr></thead><tbody>{verify_rows}</tbody></table></section></div>
-<div class="grid"><section><h2>Independent Review</h2><p><b>{_e(review.get('verdict','not run'))}</b> {_e(review.get('summary',''))}</p><ul>{findings}</ul></section>
-<section><h2>Approvals</h2><table><thead><tr><th>Action</th><th>Status</th><th>ID</th></tr></thead><tbody>{approval_rows}</tbody></table></section></div>
+  <div class="grid"><section><h2>Independent Review</h2><p><b>{_e(review.get('verdict','not run'))}</b> {_e(review.get('summary',''))}</p><ul>{findings}</ul></section>
+  <section><h2>Approvals</h2><table><thead><tr><th>Action</th><th>Status</th><th>ID</th></tr></thead><tbody>{approval_rows}</tbody></table></section></div>
+  <div class="grid"><section><h2>Evidence Contract</h2>
+  <p><b>Expected Behavior:</b> {_e(evidence.get('expected_behavior') or 'Not documented')}</p>
+  <p><b>Reproduction:</b> {_e(reproduction.get('status', 'NOT_RUN'))} <code>{_e(' '.join(reproduction.get('command', [])))}</code></p>
+  <details><summary>Reproduction output</summary><pre>{_e(reproduction.get('before', {}).get('output') or 'No output recorded')}</pre></details>
+  <p><b>Root Cause:</b> {_e(evidence.get('root_cause', {}).get('summary') or 'Not established')}</p>
+  <p><b>Locations:</b> {_e(', '.join(root_cause.get('locations', [])) or 'Not recorded')}; <b>Basis:</b> {_e('; '.join(root_cause.get('basis', [])) or 'Not recorded')}; <b>Confidence:</b> {_e(root_cause.get('confidence') if root_cause.get('confidence') is not None else 'not recorded')}</p>
+  <p><b>Fix Scope:</b> planned {_e(', '.join(scope.get('planned_files', [])) or 'unknown')}; changed {_e(', '.join(scope.get('actual_files', [])) or 'none')}; violation {_e(scope.get('violation', False))}</p>
+  <p><b>Regression:</b> before {_e(regression.get('before', {}).get('status', 'NOT_RUN'))} → after {_e(regression.get('after', {}).get('status', 'NOT_RUN'))}</p>
+  <details><summary>Regression before / after output</summary><pre>Before: {_e(regression.get('before', {}).get('output') or 'No output recorded')}\nAfter: {_e(regression.get('after', {}).get('output') or 'No output recorded')}</pre></details>
+  <p><b>CI:</b> {_e(ci.get('status', 'NOT_RUN'))}</p></section>
+  <section><h2>Decision Evidence</h2><p><b>Repository checks</b></p><ul>{checks}</ul>
+  <p><b>Review blockers:</b> {_e(len(review_evidence.get('blockers', [])))}</p>
+  <p><b>Review findings:</b> {_e('; '.join(review_evidence.get('blockers', []) + review_evidence.get('warnings', []) + review_evidence.get('info', [])) or 'None recorded')}</p>
+  <p><b>Unverified claims</b></p><ul>{unverified}</ul></section></div>
+{abstain_details}
 <section><h2>Event Timeline</h2><div class="controls"><button class="active" data-filter="all">All</button><button data-filter="model">Model</button><button data-filter="tool">Tools</button><button data-filter="phase">Phases</button><button data-filter="approval">Approvals</button></div><div id="events"></div></section></main>
 <script>const events={events_json}; const root=document.getElementById('events');
 function group(t){{if(t.startsWith('model'))return'model';if(t.startsWith('tool')||t==='verification_command')return'tool';if(t==='phase_changed')return'phase';if(t.startsWith('approval'))return'approval';return'other';}}
